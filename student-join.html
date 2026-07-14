@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Join — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="container">
+    <a href="index.html" class="brand">📘 EduExam</a>
+    <div class="nav-links"><a href="index.html">Home</a></div>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="card form-narrow">
+    <h2 style="text-align:center;">Join</h2>
+    <p style="text-align:center; color:var(--muted); font-size:14px;">
+      Enter the code your teacher gave you — works for both a regular exam and a team battle.
+    </p>
+    <div id="alertBox"></div>
+    <form id="joinForm">
+      <label for="joinCode">Exam / Battle Code</label>
+      <input type="text" id="joinCode" required placeholder="e.g. MATH-7F2K or K3F9X" style="text-transform:uppercase;">
+
+      <label for="studentName">Your Full Name</label>
+      <input type="text" id="studentName" required placeholder="e.g. Rahim Uddin">
+
+      <label for="studentEmail">Email (optional — get your result &amp; report by email)</label>
+      <input type="email" id="studentEmail" placeholder="you@example.com">
+
+      <label for="studentRoll">Roll / ID (optional)</label>
+      <input type="text" id="studentRoll" placeholder="optional">
+
+      <button type="submit" class="btn block" id="joinBtn">Continue</button>
+    </form>
+  </div>
+</div>
+
+<footer>Built for educational use — free forever. &copy; EduExam</footer>
+
+<script src="js/utils.js"></script>
+<script type="module">
+  import { db, doc, getDoc, setDoc, serverTimestamp } from "./js/firebase-init.js";
+
+  document.getElementById("joinForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const alertBox = document.getElementById("alertBox");
+    const joinBtn = document.getElementById("joinBtn");
+    alertBox.innerHTML = "";
+
+    const code = document.getElementById("joinCode").value.trim().toUpperCase();
+    const name = document.getElementById("studentName").value.trim();
+    const email = document.getElementById("studentEmail").value.trim();
+    const roll = document.getElementById("studentRoll").value.trim();
+    if (!code || !name) return;
+
+    joinBtn.disabled = true;
+    joinBtn.textContent = "Checking code…";
+
+    function resetBtn() {
+      joinBtn.disabled = false;
+      joinBtn.textContent = "Continue";
+    }
+
+    try {
+      // 1) Try it as a regular exam key first
+      const examSnap = await getDoc(doc(db, "exams", code));
+      if (examSnap.exists()) {
+        const exam = examSnap.data();
+        if (exam.status !== "published") {
+          alertBox.innerHTML = `<div class="alert warn">This exam is not currently open. Ask your teacher.</div>`;
+          resetBtn(); return;
+        }
+        sessionStorage.setItem("eduexam_student", JSON.stringify({ key: code, name, roll, email }));
+        window.location.href = `exam-instructions.html?key=${encodeURIComponent(code)}`;
+        return;
+      }
+
+      // 2) Otherwise try it as a team battle code
+      const battleSnap = await getDoc(doc(db, "battles", code));
+      if (battleSnap.exists()) {
+        const battle = battleSnap.data();
+        if (battle.status === "finished") {
+          alertBox.innerHTML = `<div class="alert warn">This battle has already ended.</div>`;
+          resetBtn(); return;
+        }
+        const participantId = `${code}__${EduUtils.slugify(name)}`;
+        const existing = await getDoc(doc(db, "battleParticipants", participantId));
+        if (!existing.exists()) {
+          await setDoc(doc(db, "battleParticipants", participantId), {
+            battleCode: code,
+            name, roll: roll || null, email: email || null,
+            teamId: null,
+            status: "waiting",
+            answers: {},
+            correctCount: 0,
+            totalQuestions: battle.questions.length,
+            joinedAt: serverTimestamp(),
+          });
+        }
+        sessionStorage.setItem("eduexam_battle_participant", JSON.stringify({ code, name, roll, email, participantId }));
+        window.location.href = `team-waiting-room.html?code=${code}`;
+        return;
+      }
+
+      // 3) Neither found
+      alertBox.innerHTML = `<div class="alert error">No exam or battle found for that code. Please check with your teacher.</div>`;
+      resetBtn();
+    } catch (err) {
+      alertBox.innerHTML = `<div class="alert error">Something went wrong: ${err.message}</div>`;
+      resetBtn();
+    }
+  });
+</script>
+</body>
+</html>

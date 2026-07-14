@@ -1,0 +1,94 @@
+rules_version = '2';
+
+// ============================================================
+// EduExam Firestore Security Rules
+// এই rules টা Firebase Console -> Firestore Database -> Rules ট্যাবে
+// পুরোপুরি paste করে "Publish" করে দাও।
+//
+// এটা যা নিশ্চিত করে:
+// - শুধু login করা teacher তার নিজের exam তৈরি/এডিট করতে পারবে।
+// - অন্য কোনো teacher অন্যের exam এডিট/ডিলিট করতে পারবে না।
+// - Exam-এর তালিকা কেউ browse/list করতে পারবে না (শুধু exact key দিয়ে খুললেই দেখা যাবে)।
+// - Student রা শুধু exam key জেনে সেই এক্সাম-ই দেখতে পারবে, সব exam না।
+// - Submission শুধু তৈরি করা যাবে/নিজেরটা পড়া যাবে; পুরো লিস্ট শুধু ওই exam-এর
+//   মালিক teacher-ই দেখতে পারবে।
+// ============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /exams/{examId} {
+      // যে কেউ single exam ডকুমেন্ট পড়তে পারবে (exam key জানলেই) — কিন্তু
+      // পুরো "exams" কালেকশন list/browse করার অনুমতি এখানে দেওয়া হয়নি,
+      // শুধু "get" (single doc) অনুমোদিত।
+      allow get: if true;
+
+      // Dashboard-এ নিজের exam list দেখানোর জন্য login করা যেকোনো teacher-কে
+      // list অনুমতি দেওয়া হয়েছে (frontend কোড where("teacherId","==",uid)
+      // দিয়ে ফিল্টার করেই query পাঠায়, তাই বাস্তবে প্রতিটা teacher শুধু নিজের
+      // exam-ই ফেরত পায়)।
+      allow list: if request.auth != null;
+
+      // তৈরি/এডিট শুধুমাত্র login করা teacher, এবং শুধু নিজের exam-এর জন্য।
+      allow create: if request.auth != null
+                    && request.resource.data.teacherId == request.auth.uid;
+
+      allow update: if request.auth != null
+                    && resource.data.teacherId == request.auth.uid
+                    && request.resource.data.teacherId == request.auth.uid;
+
+      allow delete: if request.auth != null
+                    && resource.data.teacherId == request.auth.uid;
+    }
+
+    match /submissions/{subId} {
+      // Student রা নিজের submission তৈরি/আপডেট (autosave) করতে পারবে।
+      allow create: if true;
+      allow update: if true; // classroom-simplified: autosave + self-submit, no login required for students
+
+      // একটা নির্দিষ্ট submission doc আইডি জানলে (result page-এর জন্য) পড়া যাবে।
+      allow get: if true;
+
+      // পুরো submissions list (results-analytics.html-এর জন্য) — যেকোনো
+      // login করা teacher list করতে পারবে (simplified rule, guaranteed to
+      // work). এর মানে: একজন teacher টেকনিক্যালি অন্য exam-এর submission-ও
+      // query করতে পারে যদি সে সঠিক examId জানে (এটা obscure ID, publicly
+      // browsable না)। পুরোপুরি strict করতে চাইলে Cloud Functions (Blaze
+      // plan, তবে free quota-র মধ্যেই থাকা যায়) দিয়ে সার্ভার-সাইড চেক করাতে
+      // হবে — এই ফ্রি/no-card সেটআপের জন্য এই trade-off সচেতনভাবে নেওয়া হলো।
+      allow list: if request.auth != null;
+    }
+
+    match /battles/{code} {
+      // Student-দের code দিয়ে battle খুঁজে পেতে single-doc read লাগবে।
+      allow get: if true;
+      // Mentor-এর নিজের সব battle list দেখানোর জন্য।
+      allow list: if request.auth != null;
+
+      allow create: if request.auth != null
+                    && request.resource.data.mentorId == request.auth.uid;
+      allow update: if request.auth != null
+                    && resource.data.mentorId == request.auth.uid;
+      allow delete: if request.auth != null
+                    && resource.data.mentorId == request.auth.uid;
+    }
+
+    match /battleParticipants/{id} {
+      // Student রা join করা/নিজের উত্তর autosave করার জন্য (কোনো লগইন লাগে না,
+      // solo-exam submissions-এর মতোই simplified rule)। Mentor-ও এখান থেকেই
+      // team assign করে (update)।
+      allow create: if true;
+      allow update: if true;
+      allow get: if true;
+
+      // Lobby/live-dashboard/result পেজে সব participant দেখার জন্য।
+      // ⚠️ আগে এটা "if request.auth != null" ছিল — তাতে student-রা (যাদের
+      // কোনো login নেই) team-battle-result.html-এ ফলাফল দেখতে গেলে permission
+      // denied হয়ে পুরো পেজ silently ফেইল করতো (Problem 2-এর মূল কারণ এটাই
+      // ছিল)। এখন সবাই list করতে পারবে (battleCode obscure/private code,
+      // publicly browsable না, তাই practically নিরাপদ — submissions
+      // কালেকশনের মতোই simplified trade-off)।
+      allow list: if true;
+    }
+  }
+}

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Battle in Progress — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body oncontextmenu="return false;" oncopy="return false;" oncut="return false;" onpaste="return false;">
+<nav class="navbar">
+  <div class="container"><span class="brand">📘 EduExam</span></div>
+</nav>
+
+<div class="container" style="padding-top:20px; max-width:800px;">
+  <div id="loadingBox" class="center-loading"><span class="waiting-pulse"></span> Waiting for host to start…</div>
+  <div id="examApp" style="display:none;">
+    <div class="exam-header">
+      <div>
+        <strong id="battleTitle"></strong>
+        <span id="teamBadge" class="badge" style="margin-left:10px; color:#fff;"></span>
+      </div>
+      <div class="timer" id="timerDisplay">--:--</div>
+    </div>
+
+    <div class="nav-palette" id="navPalette"></div>
+    <div class="card" id="questionCard"></div>
+
+    <div style="display:flex; justify-content:space-between; margin-top:16px;">
+      <button class="btn secondary" id="prevBtn">&larr; Previous</button>
+      <button class="btn secondary" id="nextBtn">Next &rarr;</button>
+    </div>
+
+    <div class="card" style="margin-top:20px; text-align:center;">
+      <button class="btn success" id="submitBtn">Submit My Answers</button>
+    </div>
+  </div>
+</div>
+
+<div id="submitModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); align-items:center; justify-content:center; z-index:100;">
+  <div class="card" style="max-width:400px;">
+    <h3>Submit your answers?</h3>
+    <p id="unansweredMsg"></p>
+    <div style="display:flex; gap:10px; justify-content:flex-end;">
+      <button class="btn secondary" id="cancelSubmit">Cancel</button>
+      <button class="btn danger" id="confirmSubmit">Yes, Submit</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="js/email-config.js"></script>
+<script src="js/email-report.js"></script>
+<script type="module">
+  import { db, doc, getDoc, setDoc, onSnapshot, serverTimestamp } from "./js/firebase-init.js";
+
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+  const me = JSON.parse(sessionStorage.getItem("eduexam_battle_participant") || "null");
+
+  if (!code || !me || me.code !== code) window.location.href = "student-join.html";
+
+  let battle = null;
+  let myTeamId = null;
+  let answers = {};
+  let currentIndex = 0;
+  let secondsLeft = 0;
+  let timerHandle = null;
+  let submitted = false;
+  let started = false;
+  let tabSwitchCount = 0;
+
+  onSnapshot(doc(db, "battles", code), (snap) => {
+    if (!snap.exists()) return;
+    battle = snap.data();
+    if (battle.status === "finished") { window.location.href = `team-battle-result.html?code=${code}`; return; }
+    if (battle.status === "active" && !started) { started = true; boot(); }
+  });
+
+  async function boot() {
+    const myRef = doc(db, "battleParticipants", me.participantId);
+    const mySnap = await getDoc(myRef);
+    const myData = mySnap.data();
+    myTeamId = myData.teamId;
+
+    if (myData.status === "submitted") {
+      window.location.href = `team-battle-result.html?code=${code}`;
+      return;
+    }
+    answers = myData.answers || {};
+    tabSwitchCount = myData.tabSwitchCount || 0;
+
+    const startedAtMs = myData.startedAtMs || Date.now();
+    if (!myData.startedAtMs) {
+      await setDoc(myRef, { startedAtMs, status: "active" }, { merge: true });
+    }
+    const elapsed = Math.floor((Date.now() - startedAtMs) / 1000);
+    secondsLeft = Math.max(0, battle.durationMinutes * 60 - elapsed);
+
+    document.getElementById("loadingBox").style.display = "none";
+    document.getElementById("examApp").style.display = "block";
+    document.getElementById("battleTitle").textContent = battle.title;
+    const badge = document.getElementById("teamBadge");
+    badge.textContent = battle.teamNames[myTeamId] || "No Team";
+    badge.style.background = EduUtils.teamColor(myTeamId || 0);
+
+    renderPalette();
+    renderQuestion();
+    startTimer();
+    watchTabSwitches();
+  }
+
+  function watchTabSwitches() {
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && !submitted) {
+        tabSwitchCount++;
+        setDoc(doc(db, "battleParticipants", me.participantId), { tabSwitchCount }, { merge: true });
+      }
+    });
+  }
+
+  function startTimer() {
+    updateTimerDisplay();
+    timerHandle = setInterval(() => {
+      secondsLeft--;
+      updateTimerDisplay();
+      if (secondsLeft <= 0) { clearInterval(timerHandle); doSubmit(true); }
+    }, 1000);
+  }
+  function updateTimerDisplay() {
+    const el = document.getElementById("timerDisplay");
+    el.textContent = EduUtils.formatDuration(Math.max(0, secondsLeft));
+    el.className = "timer" + (secondsLeft > 60 ? " safe" : "");
+  }
+
+  function renderPalette() {
+    const nav = document.getElementById("navPalette");
+    nav.innerHTML = battle.questions.map((q, i) => {
+      const cls = [
+        answers[q.id] !== undefined && answers[q.id] !== "" ? "answered" : "",
+        i === currentIndex ? "current" : "",
+      ].join(" ");
+      return `<button data-idx="${i}" class="${cls}">${i + 1}</button>`;
+    }).join("");
+    nav.querySelectorAll("button").forEach(btn => btn.addEventListener("click", () => {
+      currentIndex = Number(btn.dataset.idx); renderQuestion();
+    }));
+  }
+
+  function renderQuestion() {
+    const q = battle.questions[currentIndex];
+    const card = document.getElementById("questionCard");
+    let inputHtml = "";
+    if (q.type === "mcq" || q.type === "truefalse") {
+      inputHtml = q.options.map(opt => `
+        <label class="option-choice">
+          <input type="radio" name="ans" value="${EduUtils.escapeHtml(opt)}" ${answers[q.id] === opt ? "checked" : ""}>
+          ${EduUtils.escapeHtml(opt)}
+        </label>`).join("");
+    } else if (q.type === "short") {
+      inputHtml = `<input type="text" id="shortAns" value="${EduUtils.escapeHtml(answers[q.id] || "")}" placeholder="Type your answer">`;
+    }
+    card.innerHTML = `
+      <div style="color:var(--muted); font-size:13px; margin-bottom:8px;">
+        Question ${currentIndex + 1} of ${battle.questions.length} &middot; ${q.points} point(s)
+      </div>
+      <h3 style="margin-top:0;">${EduUtils.escapeHtml(q.text)}</h3>
+      ${inputHtml}`;
+
+    if (q.type === "mcq" || q.type === "truefalse") {
+      card.querySelectorAll('input[name="ans"]').forEach(el => el.addEventListener("change", () => {
+        answers[q.id] = el.value; saveProgress(); renderPalette();
+      }));
+    } else if (q.type === "short") {
+      document.getElementById("shortAns").addEventListener("input", (e) => {
+        answers[q.id] = e.target.value; saveProgress(); renderPalette();
+      });
+    }
+  }
+
+  document.getElementById("prevBtn").addEventListener("click", () => { if (currentIndex > 0) { currentIndex--; renderQuestion(); renderPalette(); } });
+  document.getElementById("nextBtn").addEventListener("click", () => { if (currentIndex < battle.questions.length - 1) { currentIndex++; renderQuestion(); renderPalette(); } });
+
+  let saveTimeout = null;
+  function saveProgress() {
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(async () => {
+      // Live-grade on every save so the mentor's team progress bars update in real time
+      const { autoScore, autoMax } = EduUtils.gradeSubmission(battle, answers);
+      await setDoc(doc(db, "battleParticipants", me.participantId), {
+        answers, correctCount: autoScore, totalPossible: autoMax,
+      }, { merge: true });
+    }, 400);
+  }
+
+  document.getElementById("submitBtn").addEventListener("click", () => {
+    const unanswered = battle.questions.filter(q => answers[q.id] === undefined || answers[q.id] === "").length;
+    document.getElementById("unansweredMsg").textContent = unanswered > 0
+      ? `You have ${unanswered} unanswered question(s). Submit anyway?`
+      : "You've answered all questions. Ready to submit?";
+    document.getElementById("submitModal").style.display = "flex";
+  });
+  document.getElementById("cancelSubmit").addEventListener("click", () => { document.getElementById("submitModal").style.display = "none"; });
+  document.getElementById("confirmSubmit").addEventListener("click", () => doSubmit(false));
+
+  async function doSubmit(auto) {
+    if (submitted) return;
+    submitted = true;
+    clearInterval(timerHandle);
+    document.getElementById("submitModal").style.display = "none";
+    const { autoScore, autoMax } = EduUtils.gradeSubmission(battle, answers);
+    await setDoc(doc(db, "battleParticipants", me.participantId), {
+      answers, correctCount: autoScore, totalPossible: autoMax,
+      status: "submitted", submittedAt: serverTimestamp(), autoSubmitted: auto,
+    }, { merge: true });
+
+    let emailNote = "";
+    if (me.email) {
+      const result = await EduEmail.sendResultEmail({
+        studentName: me.name,
+        studentEmail: me.email,
+        examTitle: battle.title,
+        questions: battle.questions,
+        answers,
+        totalScore: autoScore,
+        maxScore: autoMax,
+      });
+      if (result.sent) emailNote = `<p style="color:var(--muted); font-size:13px;">📧 A copy of your score was emailed to ${EduUtils.escapeHtml(me.email)}.</p>`;
+    }
+
+    document.getElementById("examApp").innerHTML = `
+      <div class="card" style="text-align:center;">
+        <h2>Answers submitted! ✅</h2>
+        <p style="color:var(--muted);">Waiting for the host to end the battle and reveal final results…</p>
+        <span class="waiting-pulse"></span>
+        ${emailNote}
+      </div>`;
+  }
+</script>
+</body>
+</html>

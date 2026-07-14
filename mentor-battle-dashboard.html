@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Battle Dashboard — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="container">
+    <a href="index.html" class="brand">📘 EduExam</a>
+    <div class="nav-links"><a href="teacher-dashboard.html">&larr; Dashboard</a></div>
+  </div>
+</nav>
+
+<div class="container" style="padding-top:30px;">
+  <div id="content" class="center-loading">Loading dashboard…</div>
+</div>
+
+<footer>Built for educational use — free forever. &copy; EduExam</footer>
+
+<script src="js/utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="js/email-config.js"></script>
+<script src="js/email-report.js"></script>
+<script type="module">
+  import {
+    auth, db, onAuthStateChanged, doc, getDoc, updateDoc, deleteDoc,
+    collection, query, where, onSnapshot, serverTimestamp,
+  } from "./js/firebase-init.js";
+
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+  const content = document.getElementById("content");
+  let battle = null;
+  let participants = [];
+  let ending = false;
+
+  onAuthStateChanged(auth, async (user) => {
+    if (!user) { window.location.href = "teacher-login.html"; return; }
+    if (!code) { content.innerHTML = `<div class="alert error">No battle code specified.</div>`; return; }
+
+    const snap = await getDoc(doc(db, "battles", code));
+    if (!snap.exists() || snap.data().mentorId !== user.uid) {
+      content.innerHTML = `<div class="alert error">Battle not found or you don't have access.</div>`;
+      return;
+    }
+    battle = snap.data();
+    if (battle.status === "finished") { window.location.href = `team-battle-result.html?code=${code}`; return; }
+
+    onSnapshot(doc(db, "battles", code), (s) => {
+      battle = s.data();
+      if (battle.status === "finished" && !ending) window.location.href = `team-battle-result.html?code=${code}`;
+    });
+
+    const q = query(collection(db, "battleParticipants"), where("battleCode", "==", code));
+    onSnapshot(q, (qsnap) => {
+      participants = [];
+      qsnap.forEach(d => participants.push({ id: d.id, ...d.data() }));
+      render();
+    });
+  });
+
+  function render() {
+    const teams = battle.teamNames.map((name, i) => {
+      const members = participants.filter(p => p.teamId === i);
+      const correct = members.reduce((s, m) => s + (m.correctCount || 0), 0);
+      const possible = Math.max(1, members.length * battle.questions.reduce((s, q) => s + (Number(q.points) || 0), 0));
+      const pct = Math.min(100, Math.round((correct / possible) * 100));
+      const submittedCount = members.filter(m => m.status === "submitted").length;
+      return { i, name, members, correct, possible, pct, submittedCount };
+    });
+
+    const leaderPct = Math.max(...teams.map(t => t.pct), 0);
+
+    const bars = teams.map(t => `
+      <div class="team-bar-row ${t.pct === leaderPct && t.pct > 0 ? "leading" : ""}">
+        <div class="team-bar-label">
+          <span>${EduUtils.escapeHtml(t.name)} ${t.pct === leaderPct && t.pct > 0 ? '<span class="crown">👑</span>' : ""}</span>
+          <span>${t.correct} correct &middot; ${t.members.length} student(s) &middot; ${t.submittedCount} submitted</span>
+        </div>
+        <div class="team-bar-track">
+          <div class="team-bar-fill" style="width:${t.pct}%; background:${EduUtils.teamColor(t.i)};">${t.pct}%</div>
+        </div>
+      </div>`).join("");
+
+    const allSubmitted = participants.length > 0 && participants.every(p => p.status === "submitted");
+    const unassigned = participants.filter(p => p.teamId === null || p.teamId === undefined);
+    const totalTabSwitches = participants.reduce((s, p) => s + (p.tabSwitchCount || 0), 0);
+
+    const teamOptions = battle.teamNames.map((name, i) =>
+      `<option value="${i}">${EduUtils.escapeHtml(name)}</option>`).join("");
+
+    const participantRows = participants.map(p => `
+      <div class="participant-row">
+        <div>
+          <strong>${EduUtils.escapeHtml(p.name)}</strong>
+          ${p.roll ? `<span style="color:var(--muted); font-size:13px;"> (${EduUtils.escapeHtml(p.roll)})</span>` : ""}
+          <span class="badge ${p.status === "submitted" ? "published" : "draft"}" style="margin-left:8px;">${p.status}</span>
+          ${p.tabSwitchCount > 0 ? `<span style="color:var(--warning); font-size:12px; margin-left:6px;">⚠ ${p.tabSwitchCount} tab-switch(es)</span>` : ""}
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select data-pid="${p.id}" class="teamSelect" style="border-left:5px solid ${p.teamId !== null && p.teamId !== undefined ? EduUtils.teamColor(p.teamId) : '#ccc'};">
+            <option value="">— Unassigned —</option>
+            ${teamOptions}
+          </select>
+          <button class="btn danger small removeBtn" data-pid="${p.id}" data-name="${EduUtils.escapeHtml(p.name)}">Remove</button>
+        </div>
+      </div>`).join("");
+
+    content.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h2>⚔️ ${EduUtils.escapeHtml(battle.title)} — Live</h2>
+        <button class="btn danger" id="endBtn">🏁 End Battle &amp; Show Results</button>
+      </div>
+      <div class="card">${bars}</div>
+      ${allSubmitted ? `<div class="alert success">All students have submitted! You can end the battle now.</div>` : ""}
+      ${totalTabSwitches > 0 ? `<div class="alert warn">⚠ ${totalTabSwitches} tab-switch event(s) logged across all students so far.</div>` : ""}
+
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <h3 style="margin:0;">Manage Participants (${participants.length})</h3>
+          ${unassigned.length > 0 ? `<span style="color:var(--warning); font-size:13px;">${unassigned.length} unassigned — including anyone who joined late</span>` : ""}
+        </div>
+        <p style="color:var(--muted); font-size:13px; margin-top:0;">
+          Late joiners show up here automatically — assign them a team any time, even mid-battle.
+          If a student's connection dropped and they're stuck, "Remove" clears their entry so they
+          can rejoin fresh from the join page with the same code and name.
+        </p>
+        ${participantRows || `<p style="color:var(--muted); text-align:center;">No one has joined yet.</p>`}
+      </div>
+      <div id="emailStatus"></div>
+    `;
+
+    document.querySelectorAll(".teamSelect").forEach(sel => {
+      sel.value = participants.find(p => p.id === sel.dataset.pid)?.teamId ?? "";
+      sel.addEventListener("change", async () => {
+        const teamId = sel.value === "" ? null : Number(sel.value);
+        await updateDoc(doc(db, "battleParticipants", sel.dataset.pid), { teamId, status: teamId === null ? "waiting" : (participants.find(p => p.id === sel.dataset.pid)?.status || "waiting") });
+      });
+    });
+
+    document.querySelectorAll(".removeBtn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const ok = window.confirm(`Remove ${btn.dataset.name} from this battle? They can rejoin fresh with the same code and name afterward.`);
+        if (!ok) return;
+        await deleteDoc(doc(db, "battleParticipants", btn.dataset.pid));
+        EduUtils.toast(`${btn.dataset.name} removed — they can rejoin now.`, "success");
+      });
+    });
+
+    document.getElementById("endBtn").addEventListener("click", endBattle);
+  }
+
+  async function endBattle() {
+    if (ending) return;
+    ending = true;
+    const btn = document.getElementById("endBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "Ending & emailing reports…"; }
+
+    // Email every participant who gave an email and hasn't been emailed yet —
+    // this is the "send report when I end the battle" step (Problem 3 fix).
+    const statusEl = document.getElementById("emailStatus");
+    let sent = 0, skipped = 0, failed = 0;
+    for (const p of participants) {
+      if (!p.email || p.reportEmailSent) { skipped++; continue; }
+      const result = await EduEmail.sendResultEmail({
+        studentName: p.name,
+        studentEmail: p.email,
+        examTitle: battle.title,
+        questions: battle.questions,
+        answers: p.answers || {},
+        totalScore: p.correctCount || 0,
+        maxScore: p.totalPossible || battle.questions.reduce((s, q) => s + (Number(q.points) || 0), 0),
+      });
+      if (result.sent) {
+        sent++;
+        await updateDoc(doc(db, "battleParticipants", p.id), { reportEmailSent: true });
+      } else if (result.reason && result.reason !== "no-email") {
+        failed++;
+      }
+    }
+    if (statusEl) {
+      statusEl.innerHTML = `<div class="alert info">Emails: ${sent} sent, ${failed} failed, ${skipped} skipped (no email or already sent).</div>`;
+    }
+
+    await updateDoc(doc(db, "battles", code), { status: "finished", finishedAt: serverTimestamp() });
+    window.location.href = `team-battle-result.html?code=${code}`;
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Waiting Room — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="container"><span class="brand">📘 EduExam</span></div>
+</nav>
+
+<div class="container" style="max-width:600px; padding-top:50px;">
+  <div id="content" class="card" style="text-align:center;">
+    <span class="waiting-pulse"></span> Connecting…
+  </div>
+</div>
+
+<footer>Built for educational use — free forever. &copy; EduExam</footer>
+
+<script src="js/utils.js"></script>
+<script type="module">
+  import { db, doc, onSnapshot } from "./js/firebase-init.js";
+
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+  const me = JSON.parse(sessionStorage.getItem("eduexam_battle_participant") || "null");
+  const content = document.getElementById("content");
+
+  if (!code || !me || me.code !== code) {
+    window.location.href = "student-join.html";
+  } else {
+    watch();
+  }
+
+  function watch() {
+    // Listen to the battle doc (for status + team names) and this participant's own doc (for team assignment)
+    let battle = null;
+    let myDoc = null;
+
+    onSnapshot(doc(db, "battles", code), (snap) => {
+      if (!snap.exists()) return;
+      battle = snap.data();
+      render(battle, myDoc);
+      if (battle.status === "active") {
+        window.location.href = `team-battle-live.html?code=${code}`;
+      }
+    });
+
+    onSnapshot(doc(db, "battleParticipants", me.participantId), (snap) => {
+      if (!snap.exists()) return;
+      myDoc = snap.data();
+      render(battle, myDoc);
+    });
+  }
+
+  function render(battle, myDoc) {
+    if (!battle || !myDoc) {
+      content.innerHTML = `<span class="waiting-pulse"></span> Loading…`;
+      return;
+    }
+    const teamLine = myDoc.teamId === null || myDoc.teamId === undefined
+      ? `<p style="color:var(--muted);">Waiting for the host to assign you to a team…</p>`
+      : `<div class="badge" style="background:${EduUtils.teamColor(myDoc.teamId)}; color:#fff; font-size:16px; padding:8px 18px;">
+           You're on ${EduUtils.escapeHtml(battle.teamNames[myDoc.teamId])}!
+         </div>`;
+    content.innerHTML = `
+      <h2>${EduUtils.escapeHtml(battle.title)}</h2>
+      <p style="color:var(--muted);">Hi ${EduUtils.escapeHtml(myDoc.name)}, you're in!</p>
+      ${teamLine}
+      <p style="margin-top:20px; font-size:14px; color:var(--muted);">
+        <span class="waiting-pulse"></span> The battle will start automatically once the host clicks Start.
+      </p>
+      <div class="alert warn" style="margin-top:14px; text-align:left;">
+        Once the battle starts, avoid switching tabs or apps — this is logged and shown to
+        your host. As with any free browser-based tool, this is a deterrent, not a hard lock,
+        so please play fair.
+      </div>`;
+  }
+</script>
+</body>
+</html>

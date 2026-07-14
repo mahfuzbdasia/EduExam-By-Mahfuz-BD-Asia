@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="container">
+    <a href="index.html" class="brand">📘 EduExam</a>
+    <div class="nav-links">
+      <span id="teacherEmail" style="color:var(--muted); font-size:14px;"></span>
+      <a href="#" id="logoutBtn" class="btn secondary small">Log Out</a>
+    </div>
+  </div>
+</nav>
+
+<div class="container" style="padding-top:30px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+    <h2>My Exams</h2>
+    <div style="display:flex; gap:10px;">
+      <a href="create-team-exam.html" class="btn secondary">⚔️ Create Team Battle</a>
+      <a href="create-exam.html" class="btn">+ Create New Exam</a>
+    </div>
+  </div>
+
+  <div id="examList"><div class="center-loading">Loading your exams…</div></div>
+</div>
+
+<footer>Built for educational use — free forever. &copy; EduExam</footer>
+
+<script type="module">
+  import {
+    auth, db, onAuthStateChanged, signOut, collection, query, where, getDocs, doc, deleteDoc, updateDoc,
+  } from "./js/firebase-init.js";
+
+  const examList = document.getElementById("examList");
+  const teacherEmail = document.getElementById("teacherEmail");
+  let currentUid = null;
+
+  onAuthStateChanged(auth, async (user) => {
+    if (!user) {
+      window.location.href = "teacher-login.html";
+      return;
+    }
+    currentUid = user.uid;
+    teacherEmail.textContent = user.email;
+    await loadExams(user.uid);
+  });
+
+  document.getElementById("logoutBtn").addEventListener("click", async (e) => {
+    e.preventDefault();
+    await signOut(auth);
+    window.location.href = "index.html";
+  });
+
+  async function loadExams(uid) {
+    try {
+      const q = query(collection(db, "exams"), where("teacherId", "==", uid));
+      const snap = await getDocs(q);
+      if (snap.empty) {
+        examList.innerHTML = `
+          <div class="card" style="text-align:center;">
+            <p style="color:var(--muted);">You haven't created any exams yet.</p>
+            <a href="create-exam.html" class="btn">Create Your First Exam</a>
+          </div>`;
+        return;
+      }
+      let rows = "";
+      snap.forEach((docSnap) => {
+        const e = docSnap.data();
+        rows += `
+          <tr>
+            <td><strong>${EduUtils.escapeHtml(e.title)}</strong><br>
+                <span style="color:var(--muted); font-size:13px;">${EduUtils.escapeHtml(e.subject || "")}</span></td>
+            <td><span class="badge ${e.status}">${e.status}</span></td>
+            <td>${e.questions ? e.questions.length : 0}</td>
+            <td><code>${e.key}</code></td>
+            <td>
+              <a href="create-exam.html?id=${docSnap.id}" class="btn secondary small">Edit</a>
+              <a href="results-analytics.html?id=${docSnap.id}" class="btn secondary small">Results</a>
+              ${e.status === "published" ? `<button class="btn secondary small closeBtn" data-id="${docSnap.id}" data-title="${EduUtils.escapeHtml(e.title)}">Close Exam</button>` : ""}
+              <button class="btn danger small deleteBtn" data-id="${docSnap.id}" data-title="${EduUtils.escapeHtml(e.title)}">Delete</button>
+            </td>
+          </tr>`;
+      });
+      examList.innerHTML = `
+        <div class="card">
+          <table>
+            <thead><tr><th>Exam</th><th>Status</th><th>Questions</th><th>Key</th><th>Actions</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+
+      document.querySelectorAll(".deleteBtn").forEach(btn => {
+        btn.addEventListener("click", () => handleDelete(btn.dataset.id, btn.dataset.title));
+      });
+      document.querySelectorAll(".closeBtn").forEach(btn => {
+        btn.addEventListener("click", () => handleClose(btn.dataset.id, btn.dataset.title));
+      });
+    } catch (err) {
+      examList.innerHTML = `<div class="alert error">Could not load exams. Check your Firebase setup and Firestore rules. (${err.message})</div>`;
+    }
+  }
+
+  async function handleClose(examId, title) {
+    const ok = window.confirm(
+      `Close "${title}"? Students will no longer be able to join, and everyone's final results/scores become visible immediately (even for students who haven't reached their normal time limit yet). This cannot be undone.`
+    );
+    if (!ok) return;
+    try {
+      await updateDoc(doc(db, "exams", examId), { status: "closed" });
+      EduUtils.toast("Exam closed — results are now visible to everyone.", "success");
+      await loadExams(currentUid);
+    } catch (err) {
+      EduUtils.toast("Couldn't close exam: " + err.message, "error");
+    }
+  }
+
+  async function handleDelete(examId, title) {
+    const ok = window.confirm(
+      `Delete "${title}"? This removes the exam permanently (students will no longer be able to join with its key). Past submissions/results are not deleted. This cannot be undone.`
+    );
+    if (!ok) return;
+    try {
+      await deleteDoc(doc(db, "exams", examId));
+      EduUtils.toast("Exam deleted.", "success");
+      await loadExams(currentUid);
+    } catch (err) {
+      EduUtils.toast("Couldn't delete exam: " + err.message, "error");
+    }
+  }
+</script>
+<script src="js/utils.js"></script>
+</body>
+</html>

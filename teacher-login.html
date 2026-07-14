@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Teacher Login — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="container">
+    <a href="index.html" class="brand">📘 EduExam</a>
+    <div class="nav-links"><a href="index.html">Home</a></div>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="card form-narrow">
+    <h2 id="formTitle" style="text-align:center;">Teacher Login</h2>
+    <p id="formSub" style="text-align:center; color:var(--muted); font-size:14px;">
+      Log in to manage your exams.
+    </p>
+
+    <div id="alertBox"></div>
+
+    <form id="authForm">
+      <label for="email">Email</label>
+      <input type="email" id="email" required placeholder="you@school.edu">
+
+      <label for="password">Password</label>
+      <input type="password" id="password" required placeholder="At least 6 characters" minlength="6">
+
+      <button type="submit" class="btn block" id="submitBtn">Log In</button>
+    </form>
+
+    <p style="text-align:center; margin-top:16px; font-size:14px;">
+      <span id="toggleText">Don't have an account?</span>
+      <a href="#" id="toggleMode">Sign up</a>
+    </p>
+  </div>
+</div>
+
+<footer>Built for educational use — free forever. &copy; EduExam</footer>
+
+<script type="module">
+  import {
+    auth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged,
+  } from "./js/firebase-init.js";
+
+  let mode = "login"; // or "signup"
+
+  const form = document.getElementById("authForm");
+  const toggleMode = document.getElementById("toggleMode");
+  const toggleText = document.getElementById("toggleText");
+  const formTitle = document.getElementById("formTitle");
+  const formSub = document.getElementById("formSub");
+  const submitBtn = document.getElementById("submitBtn");
+  const alertBox = document.getElementById("alertBox");
+
+  function showAlert(msg, type = "error") {
+    alertBox.innerHTML = `<div class="alert ${type}">${msg}</div>`;
+  }
+
+  toggleMode.addEventListener("click", (e) => {
+    e.preventDefault();
+    mode = mode === "login" ? "signup" : "login";
+    if (mode === "signup") {
+      formTitle.textContent = "Teacher Sign Up";
+      formSub.textContent = "Create a free teacher account.";
+      submitBtn.textContent = "Sign Up";
+      toggleText.textContent = "Already have an account?";
+      toggleMode.textContent = "Log in";
+    } else {
+      formTitle.textContent = "Teacher Login";
+      formSub.textContent = "Log in to manage your exams.";
+      submitBtn.textContent = "Log In";
+      toggleText.textContent = "Don't have an account?";
+      toggleMode.textContent = "Sign up";
+    }
+    alertBox.innerHTML = "";
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = document.getElementById("email").value.trim();
+    const password = document.getElementById("password").value;
+    submitBtn.disabled = true;
+    alertBox.innerHTML = "";
+    try {
+      if (mode === "signup") {
+        await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+      window.location.href = "teacher-dashboard.html";
+    } catch (err) {
+      showAlert(friendlyError(err.code));
+      submitBtn.disabled = false;
+    }
+  });
+
+  function friendlyError(code) {
+    const map = {
+      "auth/email-already-in-use": "This email is already registered — try logging in instead.",
+      "auth/invalid-email": "Please enter a valid email address.",
+      "auth/weak-password": "Password should be at least 6 characters.",
+      "auth/user-not-found": "No account found with this email. Try signing up.",
+      "auth/wrong-password": "Incorrect password. Please try again.",
+      "auth/invalid-credential": "Incorrect email or password.",
+    };
+    return map[code] || "Something went wrong. Please check your Firebase setup (see README.md) and try again.";
+  }
+
+  // If already logged in, skip straight to dashboard
+  onAuthStateChanged(auth, (user) => {
+    if (user) window.location.href = "teacher-dashboard.html";
+  });
+</script>
+</body>
+</html>

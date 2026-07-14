@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Battle Results — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="container"><a href="index.html" class="brand">📘 EduExam</a></div>
+</nav>
+
+<div class="container" style="max-width:800px; padding-top:30px;">
+  <div id="content" class="center-loading">Loading final results…</div>
+</div>
+
+<footer>Built for educational use — free forever. &copy; EduExam</footer>
+
+<script src="js/utils.js"></script>
+<script type="module">
+  import { db, doc, getDoc, collection, query, where, getDocs } from "./js/firebase-init.js";
+
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+  const content = document.getElementById("content");
+
+  load();
+
+  async function load() {
+    if (!code) { content.innerHTML = `<div class="alert error">No battle code specified.</div>`; return; }
+    const battleSnap = await getDoc(doc(db, "battles", code));
+    if (!battleSnap.exists()) { content.innerHTML = `<div class="alert error">Battle not found.</div>`; return; }
+    const battle = battleSnap.data();
+
+    const q = query(collection(db, "battleParticipants"), where("battleCode", "==", code));
+    const snap = await getDocs(q);
+    const participants = [];
+    snap.forEach(d => participants.push(d.data()));
+
+    const totalPointsPerStudent = battle.questions.reduce((s, q) => s + (Number(q.points) || 0), 0);
+
+    const teams = battle.teamNames.map((name, i) => {
+      const members = participants.filter(p => p.teamId === i);
+      const correct = members.reduce((s, m) => s + (m.correctCount || 0), 0);
+      const possible = Math.max(1, members.length * totalPointsPerStudent);
+      const pct = members.length > 0 ? Math.round((correct / possible) * 100) : 0;
+      return { i, name, members, correct, possible, pct };
+    }).sort((a, b) => b.correct - a.correct || b.pct - a.pct);
+
+    const podiumOrder = [teams[1], teams[0], teams[2]].filter(Boolean); // visual order: 2nd,1st,3rd
+    const podiumHtml = podiumOrder.map((t) => {
+      if (!t) return "";
+      const rank = teams.indexOf(t);
+      const cls = rank === 0 ? "first" : rank === 1 ? "second" : "third";
+      const medal = EduUtils.MEDALS[rank] || "";
+      return `
+        <div class="podium-place ${cls}">
+          <div class="medal">${medal}</div>
+          <div class="name">${EduUtils.escapeHtml(t.name)}</div>
+          <div class="score">${t.correct} pts &middot; ${t.pct}%</div>
+        </div>`;
+    }).join("");
+
+    const restRows = teams.slice(3).map((t, idx) => `
+      <div class="team-bar-row">
+        <div class="team-bar-label"><span>#${idx + 4} ${EduUtils.escapeHtml(t.name)}</span><span>${t.correct} pts &middot; ${t.pct}%</span></div>
+        <div class="team-bar-track"><div class="team-bar-fill" style="width:${t.pct}%; background:${EduUtils.teamColor(t.i)};"></div></div>
+      </div>`).join("");
+
+    content.innerHTML = `
+      <h2 style="text-align:center;">🏆 ${EduUtils.escapeHtml(battle.title)} — Final Results</h2>
+      <div class="podium">${podiumHtml}</div>
+      ${restRows ? `<div class="card">${restRows}</div>` : ""}
+      <div class="card">
+        <h3>All Students</h3>
+        <table>
+          <thead><tr><th>Name</th><th>Team</th><th>Score</th><th>%</th><th>Tab-switches</th></tr></thead>
+          <tbody>
+            ${participants
+              .sort((a, b) => (b.correctCount || 0) - (a.correctCount || 0))
+              .map(p => `
+                <tr>
+                  <td>${EduUtils.escapeHtml(p.name)}</td>
+                  <td><span class="badge" style="background:${EduUtils.teamColor(p.teamId ?? 0)}; color:#fff;">${EduUtils.escapeHtml(battle.teamNames[p.teamId] || "—")}</span></td>
+                  <td>${p.correctCount || 0} / ${p.totalPossible || totalPointsPerStudent}</td>
+                  <td>${p.totalPossible ? Math.round(((p.correctCount || 0) / p.totalPossible) * 100) : 0}%</td>
+                  <td>${p.tabSwitchCount || 0}</td>
+                </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+</script>
+</body>
+</html>

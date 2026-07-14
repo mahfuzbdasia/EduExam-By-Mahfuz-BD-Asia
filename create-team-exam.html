@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Create Team Battle — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="container">
+    <a href="index.html" class="brand">📘 EduExam</a>
+    <div class="nav-links"><a href="teacher-dashboard.html">&larr; Dashboard</a></div>
+  </div>
+</nav>
+
+<div class="container" style="padding-top:30px; max-width:800px;">
+  <h2>⚔️ Create a Team Battle</h2>
+  <p style="color:var(--muted);">Students compete in teams. You control who joins which team, then everyone answers live while you watch team progress bars race in real time.</p>
+  <div id="alertBox"></div>
+
+  <div class="card">
+    <label for="title">Battle Title</label>
+    <input type="text" id="title" placeholder="e.g. Science Quiz Battle">
+
+    <div style="display:flex; gap:16px;">
+      <div style="flex:1;">
+        <label for="subject">Subject</label>
+        <input type="text" id="subject" placeholder="e.g. General Science">
+      </div>
+      <div style="flex:1;">
+        <label for="duration">Duration (minutes)</label>
+        <input type="number" id="duration" value="15" min="1">
+      </div>
+    </div>
+
+    <label for="numTeams">Number of Teams</label>
+    <select id="numTeams">
+      <option value="2">2 Teams</option>
+      <option value="3">3 Teams</option>
+      <option value="4" selected>4 Teams</option>
+      <option value="5">5 Teams</option>
+      <option value="6">6 Teams</option>
+    </select>
+
+    <label>Team Names</label>
+    <div id="teamNamesBox"></div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0;">📥 Import Questions (from text or PDF)</h3>
+    <p style="color:var(--muted); font-size:14px;">
+      Paste questions in the format shown, or upload a PDF (its text will be pulled in
+      automatically) — then click <strong>Parse &amp; Add Questions</strong>. This adds to
+      the question list below; it doesn't replace anything you already added.
+    </p>
+    <div style="display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+      <label class="btn secondary small" style="cursor:pointer;">
+        📄 Upload PDF
+        <input type="file" id="pdfInput" accept="application/pdf" style="display:none;">
+      </label>
+      <button type="button" class="btn secondary small" id="loadSampleBtn">Show Example Format</button>
+      <span id="pdfStatus" style="font-size:13px; color:var(--muted); align-self:center;"></span>
+    </div>
+    <textarea id="importText" rows="8" placeholder="1. What is the capital of Bangladesh?
+A) Dhaka
+B) Chattogram
+C) Khulna
+D) Sylhet
+Answer: A
+Points: 2
+
+2. The sun rises in the east.
+True/False
+Answer: True"></textarea>
+    <button type="button" class="btn" id="parseBtn">Parse &amp; Add Questions</button>
+    <div id="importResult" style="margin-top:12px;"></div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h3 style="margin:0;">Questions</h3>
+      <select id="newQType">
+        <option value="mcq">Multiple Choice</option>
+        <option value="truefalse">True / False</option>
+        <option value="short">Short Answer</option>
+      </select>
+    </div>
+    <button type="button" class="btn secondary" id="addQBtn">+ Add Question</button>
+    <div id="questionsContainer" style="margin-top:16px;"></div>
+  </div>
+
+  <div class="card" style="display:flex; justify-content:flex-end;">
+    <button class="btn success" id="createBtn">Create Battle &amp; Get Code</button>
+  </div>
+
+  <div id="codeResult"></div>
+</div>
+
+<footer>Built for educational use — free forever. &copy; EduExam</footer>
+
+<script src="js/utils.js"></script>
+<script src="js/question-parser.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script>
+  document.getElementById("loadSampleBtn").addEventListener("click", () => {
+    document.getElementById("importText").value = EduParser.SAMPLE_FORMAT;
+  });
+
+  document.getElementById("pdfInput").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const statusEl = document.getElementById("pdfStatus");
+    statusEl.textContent = "Reading PDF…";
+    try {
+      if (window["pdfjsLib"]) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+      }
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      let fullText = "";
+      for (let p = 1; p <= pdf.numPages; p++) {
+        const page = await pdf.getPage(p);
+        const content = await page.getTextContent();
+        fullText += content.items.map(it => it.str).join(" ") + "\n\n";
+      }
+      document.getElementById("importText").value = fullText.trim();
+      statusEl.textContent = `Loaded text from ${pdf.numPages} page(s). Check formatting, then click "Parse & Add Questions".`;
+    } catch (err) {
+      statusEl.textContent = "Couldn't read this PDF automatically. Please copy the text and paste it into the box manually.";
+    }
+  });
+</script>
+<script type="module">
+  import { auth, db, onAuthStateChanged, doc, setDoc, serverTimestamp } from "./js/firebase-init.js";
+
+  let currentUser = null;
+  let questions = [];
+
+  onAuthStateChanged(auth, (user) => {
+    if (!user) { window.location.href = "teacher-login.html"; return; }
+    currentUser = user;
+  });
+
+  document.getElementById("numTeams").addEventListener("change", renderTeamNameInputs);
+  renderTeamNameInputs();
+
+  function renderTeamNameInputs() {
+    const n = Number(document.getElementById("numTeams").value);
+    const box = document.getElementById("teamNamesBox");
+    const defaults = ["Team A", "Team B", "Team C", "Team D", "Team E", "Team F"];
+    let html = "";
+    for (let i = 0; i < n; i++) {
+      const existing = box.querySelector(`[data-team="${i}"]`)?.value;
+      html += `<input type="text" data-team="${i}" class="teamNameInput" value="${existing || defaults[i]}" style="border-left:5px solid ${EduUtils.teamColor(i)};">`;
+    }
+    box.innerHTML = html;
+  }
+
+  document.getElementById("addQBtn").addEventListener("click", () => {
+    const type = document.getElementById("newQType").value;
+    const q = { id: EduUtils.uid(), type, text: "", points: 1 };
+    if (type === "mcq") { q.options = ["", "", "", ""]; q.correctAnswers = [""]; }
+    if (type === "truefalse") { q.options = ["True", "False"]; q.correctAnswers = ["True"]; }
+    if (type === "short") { q.correctAnswers = [""]; }
+    questions.push(q);
+    renderQuestions();
+  });
+
+  function renderQuestions() {
+    const container = document.getElementById("questionsContainer");
+    if (questions.length === 0) {
+      container.innerHTML = `<p style="color:var(--muted); text-align:center;">No questions yet.</p>`;
+      return;
+    }
+    container.innerHTML = questions.map((q, idx) => renderQuestionCard(q, idx)).join("");
+    attachQuestionEvents();
+  }
+
+  document.getElementById("parseBtn").addEventListener("click", () => {
+    const text = document.getElementById("importText").value;
+    const { questions: parsed, errors } = EduParser.parseQuestionsText(text);
+    const resultBox = document.getElementById("importResult");
+    let html = "";
+    if (parsed.length > 0) {
+      questions.push(...parsed);
+      renderQuestions();
+      html += `<div class="alert success">Added ${parsed.length} question(s) below. Scroll down to review/edit them.</div>`;
+    }
+    if (errors.length > 0) {
+      html += `<div class="alert warn">${errors.length} block(s) couldn't be parsed:<br>${errors.map(EduUtils.escapeHtml).join("<br>")}</div>`;
+    }
+    if (parsed.length === 0 && errors.length === 0) {
+      html = `<div class="alert error">No questions found. Check the format against the example.</div>`;
+    }
+    resultBox.innerHTML = html;
+  });
+
+  function renderQuestionCard(q, idx) {
+    let body = "";
+    if (q.type === "mcq") {
+      body = q.options.map((opt, i) => `
+        <div class="option-row">
+          <input type="radio" name="correct-${q.id}" data-qid="${q.id}" data-idx="${i}" class="correctRadio" ${q.correctAnswers[0] === opt && opt !== "" ? "checked" : ""}>
+          <input type="text" value="${EduUtils.escapeHtml(opt)}" placeholder="Option ${i + 1}" data-qid="${q.id}" data-idx="${i}" class="optionInput">
+        </div>`).join("");
+    } else if (q.type === "truefalse") {
+      body = `
+        <div class="option-row"><label><input type="radio" name="tf-${q.id}" data-qid="${q.id}" value="True" class="tfRadio" ${q.correctAnswers[0] === "True" ? "checked" : ""}> True</label></div>
+        <div class="option-row"><label><input type="radio" name="tf-${q.id}" data-qid="${q.id}" value="False" class="tfRadio" ${q.correctAnswers[0] === "False" ? "checked" : ""}> False</label></div>`;
+    } else if (q.type === "short") {
+      body = `<label>Accepted answer(s) — comma-separated</label>
+        <input type="text" class="shortAnswerInput" data-qid="${q.id}" value="${EduUtils.escapeHtml((q.correctAnswers || []).join(", "))}">`;
+    }
+    return `
+      <div class="q-card">
+        <div class="q-card-header">
+          <strong>Q${idx + 1} — ${q.type.toUpperCase()}</strong>
+          <div>
+            <label style="display:inline-block; margin-right:10px;">Points
+              <input type="number" class="pointsInput" data-qid="${q.id}" value="${q.points}" min="0" style="width:60px; display:inline-block; margin:0 0 0 6px;">
+            </label>
+            <button type="button" class="btn danger small removeQBtn" data-qid="${q.id}">Remove</button>
+          </div>
+        </div>
+        <textarea class="qTextInput" data-qid="${q.id}" rows="2" placeholder="Question text">${EduUtils.escapeHtml(q.text)}</textarea>
+        ${body}
+      </div>`;
+  }
+
+  function attachQuestionEvents() {
+    document.querySelectorAll(".removeQBtn").forEach(btn => btn.addEventListener("click", () => {
+      questions = questions.filter(q => q.id !== btn.dataset.qid);
+      renderQuestions();
+    }));
+    document.querySelectorAll(".qTextInput").forEach(el => el.addEventListener("input", () => { findQ(el.dataset.qid).text = el.value; }));
+    document.querySelectorAll(".pointsInput").forEach(el => el.addEventListener("input", () => { findQ(el.dataset.qid).points = Number(el.value) || 0; }));
+    document.querySelectorAll(".optionInput").forEach(el => el.addEventListener("input", () => {
+      const q = findQ(el.dataset.qid); const idx = Number(el.dataset.idx); const oldVal = q.options[idx];
+      q.options[idx] = el.value;
+      if (q.correctAnswers[0] === oldVal) q.correctAnswers[0] = el.value;
+    }));
+    document.querySelectorAll(".correctRadio").forEach(el => el.addEventListener("change", () => {
+      const q = findQ(el.dataset.qid); q.correctAnswers[0] = q.options[Number(el.dataset.idx)];
+    }));
+    document.querySelectorAll(".tfRadio").forEach(el => el.addEventListener("change", () => { findQ(el.dataset.qid).correctAnswers[0] = el.value; }));
+    document.querySelectorAll(".shortAnswerInput").forEach(el => el.addEventListener("input", () => {
+      findQ(el.dataset.qid).correctAnswers = el.value.split(",").map(s => s.trim()).filter(Boolean);
+    }));
+  }
+
+  function findQ(id) { return questions.find(q => q.id === id); }
+
+  function validate() {
+    if (!document.getElementById("title").value.trim()) return "Please enter a battle title.";
+    if (questions.length === 0) return "Add at least one question.";
+    for (const q of questions) {
+      if (!q.text.trim()) return "Every question needs question text.";
+      if (q.type === "mcq" && q.options.some(o => !o.trim())) return "Fill in all MCQ options.";
+      if (q.type === "mcq" && !q.correctAnswers[0]) return "Select the correct MCQ answer.";
+      if (q.type === "short" && (!q.correctAnswers || q.correctAnswers.length === 0)) return "Add an accepted answer for short-answer questions.";
+    }
+    return null;
+  }
+
+  document.getElementById("createBtn").addEventListener("click", async () => {
+    const err = validate();
+    const alertBox = document.getElementById("alertBox");
+    if (err) { alertBox.innerHTML = `<div class="alert error">${err}</div>`; return; }
+    alertBox.innerHTML = "";
+
+    const teamNames = Array.from(document.querySelectorAll(".teamNameInput")).map(el => el.value.trim() || "Team");
+    const code = EduUtils.generateBattleCode();
+
+    await setDoc(doc(db, "battles", code), {
+      mentorId: currentUser.uid,
+      mentorEmail: currentUser.email,
+      title: document.getElementById("title").value.trim(),
+      subject: document.getElementById("subject").value.trim(),
+      durationMinutes: Number(document.getElementById("duration").value) || 15,
+      numTeams: teamNames.length,
+      teamNames,
+      questions,
+      status: "waiting",
+      createdAt: serverTimestamp(),
+    });
+
+    document.getElementById("codeResult").innerHTML = `
+      <div class="battle-code-box">
+        <div style="font-size:14px; opacity:.8;">Share this code with students:</div>
+        <div class="code">${code}</div>
+        <div style="margin-top:12px;">
+          <a href="mentor-lobby.html?code=${code}" class="btn success">Go to Lobby &rarr;</a>
+        </div>
+      </div>`;
+  });
+</script>
+</body>
+</html>

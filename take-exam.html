@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Exam in Progress — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body oncontextmenu="return false;" oncopy="return false;" oncut="return false;" onpaste="return false;">
+<nav class="navbar">
+  <div class="container"><span class="brand">📘 EduExam</span></div>
+</nav>
+
+<div class="container" style="padding-top:20px; max-width:800px;">
+  <div id="loadingBox" class="center-loading">Loading exam…</div>
+  <div id="examApp" style="display:none;">
+    <div class="exam-header">
+      <div><strong id="examTitle"></strong></div>
+      <div class="timer" id="timerDisplay">--:--</div>
+    </div>
+
+    <div class="nav-palette" id="navPalette"></div>
+
+    <div class="card" id="questionCard"></div>
+
+    <div style="display:flex; justify-content:space-between; margin-top:16px;">
+      <button class="btn secondary" id="prevBtn">&larr; Previous</button>
+      <button class="btn secondary" id="flagBtn">Flag for Review</button>
+      <button class="btn secondary" id="nextBtn">Next &rarr;</button>
+    </div>
+
+    <div class="card" style="margin-top:20px; text-align:center;">
+      <button class="btn success" id="submitBtn">Submit Exam</button>
+    </div>
+  </div>
+</div>
+
+<div id="submitModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); align-items:center; justify-content:center; z-index:100;">
+  <div class="card" style="max-width:400px;">
+    <h3>Submit exam?</h3>
+    <p id="unansweredMsg"></p>
+    <div style="display:flex; gap:10px; justify-content:flex-end;">
+      <button class="btn secondary" id="cancelSubmit">Cancel</button>
+      <button class="btn danger" id="confirmSubmit">Yes, Submit</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/utils.js"></script>
+<script type="module">
+  import { db, doc, getDoc, setDoc, serverTimestamp } from "./js/firebase-init.js";
+
+  const params = new URLSearchParams(window.location.search);
+  const key = params.get("key");
+  const student = JSON.parse(sessionStorage.getItem("eduexam_student") || "null");
+
+  if (!key || !student || student.key !== key) {
+    window.location.href = "student-join.html";
+  }
+
+  const submissionId = `${key}__${EduUtils.slugify(student?.name || "")}`;
+  let exam = null;
+  let answers = {};
+  let flagged = new Set();
+  let currentIndex = 0;
+  let secondsLeft = 0;
+  let timerHandle = null;
+  let tabSwitchCount = 0;
+  let submitted = false;
+
+  init();
+
+  async function init() {
+    // Block re-entry if already submitted
+    const existingSub = await getDoc(doc(db, "submissions", submissionId));
+    if (existingSub.exists() && existingSub.data().status === "submitted") {
+      window.location.href = `exam-result.html?sub=${submissionId}`;
+      return;
+    }
+
+    const snap = await getDoc(doc(db, "exams", key));
+    if (!snap.exists() || snap.data().status !== "published") {
+      document.getElementById("loadingBox").innerHTML = `<div class="alert error">This exam is no longer available.</div>`;
+      return;
+    }
+    exam = snap.data();
+
+    // Restore in-progress answers if this student refreshed mid-exam
+    let startedAt = Date.now();
+    if (existingSub.exists()) {
+      const d = existingSub.data();
+      answers = d.answers || {};
+      flagged = new Set(d.flagged || []);
+      tabSwitchCount = d.tabSwitchCount || 0;
+      if (d.startedAtMs) startedAt = d.startedAtMs;
+    } else {
+      await setDoc(doc(db, "submissions", submissionId), {
+        examId: key,
+        studentName: student.name,
+        studentRoll: student.roll || null,
+        studentEmail: student.email || null,
+        answers: {},
+        flagged: [],
+        tabSwitchCount: 0,
+        status: "in-progress",
+        startedAt: serverTimestamp(),
+        startedAtMs: startedAt,
+      });
+    }
+
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+    secondsLeft = Math.max(0, exam.durationMinutes * 60 - elapsedSeconds);
+
+    document.getElementById("loadingBox").style.display = "none";
+    document.getElementById("examApp").style.display = "block";
+    document.getElementById("examTitle").textContent = exam.title;
+
+    renderPalette();
+    renderQuestion();
+    startTimer();
+    watchTabSwitches();
+  }
+
+  function startTimer() {
+    updateTimerDisplay();
+    timerHandle = setInterval(() => {
+      secondsLeft--;
+      updateTimerDisplay();
+      if (secondsLeft <= 0) {
+        clearInterval(timerHandle);
+        doSubmit(true);
+      }
+    }, 1000);
+  }
+
+  function updateTimerDisplay() {
+    const el = document.getElementById("timerDisplay");
+    el.textContent = EduUtils.formatDuration(Math.max(0, secondsLeft));
+    el.className = "timer" + (secondsLeft > 60 ? " safe" : "");
+  }
+
+  function watchTabSwitches() {
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && !submitted) {
+        tabSwitchCount++;
+        saveProgress();
+      }
+    });
+  }
+
+  function renderPalette() {
+    const nav = document.getElementById("navPalette");
+    nav.innerHTML = exam.questions.map((q, i) => {
+      const cls = [
+        answers[q.id] !== undefined && answers[q.id] !== "" ? "answered" : "",
+        flagged.has(q.id) ? "flagged" : "",
+        i === currentIndex ? "current" : "",
+      ].join(" ");
+      return `<button data-idx="${i}" class="${cls}">${i + 1}</button>`;
+    }).join("");
+    nav.querySelectorAll("button").forEach(btn => btn.addEventListener("click", () => {
+      currentIndex = Number(btn.dataset.idx);
+      renderQuestion();
+    }));
+  }
+
+  function renderQuestion() {
+    const q = exam.questions[currentIndex];
+    const card = document.getElementById("questionCard");
+    let inputHtml = "";
+    if (q.type === "mcq" || q.type === "truefalse") {
+      inputHtml = q.options.map((opt, i) => `
+        <label class="option-choice">
+          <input type="radio" name="ans" value="${EduUtils.escapeHtml(opt)}" ${answers[q.id] === opt ? "checked" : ""}>
+          ${EduUtils.escapeHtml(opt)}
+        </label>`).join("");
+    } else if (q.type === "short") {
+      inputHtml = `<input type="text" id="shortAns" value="${EduUtils.escapeHtml(answers[q.id] || "")}" placeholder="Type your answer">`;
+    }
+    card.innerHTML = `
+      <div style="color:var(--muted); font-size:13px; margin-bottom:8px;">
+        Question ${currentIndex + 1} of ${exam.questions.length} &middot; ${q.points} point(s)
+      </div>
+      <h3 style="margin-top:0;">${EduUtils.escapeHtml(q.text)}</h3>
+      ${inputHtml}`;
+
+    if (q.type === "mcq" || q.type === "truefalse") {
+      card.querySelectorAll('input[name="ans"]').forEach(el => el.addEventListener("change", () => {
+        answers[q.id] = el.value;
+        saveProgress(); renderPalette();
+      }));
+    } else if (q.type === "short") {
+      document.getElementById("shortAns").addEventListener("input", (e) => {
+        answers[q.id] = e.target.value;
+        saveProgress(); renderPalette();
+      });
+    }
+
+    document.getElementById("flagBtn").textContent = flagged.has(q.id) ? "Unflag" : "Flag for Review";
+  }
+
+  document.getElementById("prevBtn").addEventListener("click", () => {
+    if (currentIndex > 0) { currentIndex--; renderQuestion(); renderPalette(); }
+  });
+  document.getElementById("nextBtn").addEventListener("click", () => {
+    if (currentIndex < exam.questions.length - 1) { currentIndex++; renderQuestion(); renderPalette(); }
+  });
+  document.getElementById("flagBtn").addEventListener("click", () => {
+    const qid = exam.questions[currentIndex].id;
+    if (flagged.has(qid)) flagged.delete(qid); else flagged.add(qid);
+    saveProgress(); renderQuestion(); renderPalette();
+  });
+
+  let saveTimeout = null;
+  function saveProgress() {
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(async () => {
+      await setDoc(doc(db, "submissions", submissionId), {
+        answers, flagged: Array.from(flagged), tabSwitchCount,
+      }, { merge: true });
+    }, 400);
+  }
+
+  document.getElementById("submitBtn").addEventListener("click", () => {
+    const unanswered = exam.questions.filter(q => answers[q.id] === undefined || answers[q.id] === "").length;
+    document.getElementById("unansweredMsg").textContent = unanswered > 0
+      ? `You have ${unanswered} unanswered question(s). Submit anyway?`
+      : "You've answered all questions. Ready to submit?";
+    document.getElementById("submitModal").style.display = "flex";
+  });
+  document.getElementById("cancelSubmit").addEventListener("click", () => {
+    document.getElementById("submitModal").style.display = "none";
+  });
+  document.getElementById("confirmSubmit").addEventListener("click", () => doSubmit(false));
+
+  async function doSubmit(auto) {
+    if (submitted) return;
+    submitted = true;
+    clearInterval(timerHandle);
+    document.getElementById("submitModal").style.display = "none";
+
+    const { autoScore, autoMax } = EduUtils.gradeSubmission(exam, answers);
+    await setDoc(doc(db, "submissions", submissionId), {
+      answers, flagged: Array.from(flagged), tabSwitchCount,
+      autoScore, autoMax, totalScore: autoScore, maxScore: autoMax,
+      status: "submitted",
+      submittedAt: serverTimestamp(),
+      autoSubmitted: auto,
+    }, { merge: true });
+
+    window.location.href = `exam-result.html?sub=${submissionId}`;
+  }
+</script>
+</body>
+</html>

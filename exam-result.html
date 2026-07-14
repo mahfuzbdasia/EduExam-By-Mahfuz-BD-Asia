@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Exam Result — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="container"><a href="index.html" class="brand">📘 EduExam</a></div>
+</nav>
+
+<div class="container" style="max-width:600px; padding-top:40px;">
+  <div id="content" class="center-loading">Loading result…</div>
+</div>
+
+<footer>Built for educational use — free forever. &copy; EduExam</footer>
+
+<script src="js/utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="js/email-config.js"></script>
+<script src="js/email-report.js"></script>
+<script type="module">
+  import { db, doc, getDoc, updateDoc } from "./js/firebase-init.js";
+
+  const params = new URLSearchParams(window.location.search);
+  const subId = params.get("sub");
+  const content = document.getElementById("content");
+
+  load();
+
+  async function load() {
+    if (!subId) { content.innerHTML = `<div class="alert error">No result specified.</div>`; return; }
+    const snap = await getDoc(doc(db, "submissions", subId));
+    if (!snap.exists()) { content.innerHTML = `<div class="alert error">Result not found.</div>`; return; }
+    const sub = snap.data();
+    if (sub.status !== "submitted" && sub.status !== "graded") {
+      content.innerHTML = `<div class="alert warn">This exam has not been submitted yet.</div>`;
+      return;
+    }
+
+    const examSnap = await getDoc(doc(db, "exams", sub.examId));
+    const exam = examSnap.exists() ? examSnap.data() : null;
+
+    // Don't reveal the score/answers until either the teacher has closed the
+    // exam for everyone, or this student's own time window would naturally
+    // have ended — otherwise a fast finisher could re-open this link and
+    // share correct answers with classmates still taking the same exam.
+    const revealTime = (exam && sub.startedAtMs)
+      ? sub.startedAtMs + exam.durationMinutes * 60 * 1000
+      : 0; // if we can't compute it, don't block (avoids breaking older data)
+    const isClosed = exam && exam.status === "closed";
+    const isRevealed = isClosed || !revealTime || Date.now() >= revealTime;
+
+    if (!isRevealed) {
+      const unlockDate = new Date(revealTime);
+      content.innerHTML = `
+        <div class="card" style="text-align:center;">
+          <h2>Answers Submitted ✅</h2>
+          <p style="color:var(--muted);">${EduUtils.escapeHtml(sub.studentName)}</p>
+          <div class="alert info" style="margin-top:16px;">
+            Your score will be available once the exam's time window ends for everyone
+            (around <strong>${unlockDate.toLocaleTimeString()}</strong>), so early finishers
+            can't share answers with classmates still testing.
+          </div>
+          <button class="btn secondary" onclick="location.reload()">Refresh</button>
+        </div>`;
+      return; // also holds off the report email until it's safe to reveal
+    }
+
+    const percent = sub.maxScore > 0 ? Math.round((sub.totalScore / sub.maxScore) * 100) : 0;
+    content.innerHTML = `
+      <div class="card" style="text-align:center;">
+        <h2>Exam Submitted ✅</h2>
+        <p style="color:var(--muted);">${EduUtils.escapeHtml(sub.studentName)}</p>
+        <div style="font-size:48px; font-weight:700; color:var(--primary); margin:16px 0;">
+          ${sub.totalScore} / ${sub.maxScore}
+        </div>
+        <div style="font-size:18px; color:var(--muted);">${percent}%</div>
+        ${sub.tabSwitchCount > 0 ? `<p style="font-size:13px; color:var(--warning); margin-top:16px;">Note: ${sub.tabSwitchCount} tab-switch event(s) were logged during your exam.</p>` : ""}
+        <p style="margin-top:20px; font-size:14px; color:var(--muted);">
+          If your exam included short/long-answer questions requiring manual review,
+          your teacher may update this score after grading. You can revisit this exact link anytime.
+        </p>
+        <div id="emailStatus" style="margin-top:14px; font-size:13px; color:var(--muted);"></div>
+      </div>
+    `;
+
+    // Email the score + right/wrong breakdown — only once per submission, and only
+    // if the student gave an email and EmailJS has been configured (js/email-config.js).
+    if (sub.studentEmail && !sub.reportEmailSent && exam) {
+      const result = await EduEmail.sendResultEmail({
+        studentName: sub.studentName,
+        studentEmail: sub.studentEmail,
+        examTitle: exam.title,
+        questions: exam.questions,
+        answers: sub.answers || {},
+        totalScore: sub.totalScore,
+        maxScore: sub.maxScore,
+      });
+      const emailStatusEl = document.getElementById("emailStatus");
+      if (result.sent) {
+        await updateDoc(doc(db, "submissions", subId), { reportEmailSent: true });
+        emailStatusEl.textContent = `📧 A copy of your result was emailed to ${sub.studentEmail}.`;
+      } else if (result.reason === "not-configured" || result.reason === "sdk-not-loaded") {
+        // Silent — teacher hasn't set up email reports yet, don't confuse the student.
+      } else if (result.reason !== "no-email") {
+        emailStatusEl.textContent = `Couldn't email your result — please screenshot this page instead.`;
+      }
+    }
+  }
+</script>
+</body>
+</html>

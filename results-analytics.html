@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Results — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="container">
+    <a href="index.html" class="brand">📘 EduExam</a>
+    <div class="nav-links"><a href="teacher-dashboard.html">&larr; Back to Dashboard</a></div>
+  </div>
+</nav>
+
+<div class="container" style="padding-top:30px;">
+  <div id="content" class="center-loading">Loading results…</div>
+</div>
+
+<footer>Built for educational use — free forever. &copy; EduExam</footer>
+
+<script src="js/utils.js"></script>
+<script type="module">
+  import {
+    auth, db, onAuthStateChanged, doc, getDoc, collection, query, where, getDocs,
+  } from "./js/firebase-init.js";
+
+  const params = new URLSearchParams(window.location.search);
+  const examId = params.get("id");
+  const content = document.getElementById("content");
+
+  onAuthStateChanged(auth, async (user) => {
+    if (!user) { window.location.href = "teacher-login.html"; return; }
+    await load(user.uid);
+  });
+
+  async function load(uid) {
+    if (!examId) { content.innerHTML = `<div class="alert error">No exam specified.</div>`; return; }
+    const examSnap = await getDoc(doc(db, "exams", examId));
+    if (!examSnap.exists() || examSnap.data().teacherId !== uid) {
+      content.innerHTML = `<div class="alert error">Exam not found or you don't have access.</div>`;
+      return;
+    }
+    const exam = examSnap.data();
+
+    const subQ = query(collection(db, "submissions"), where("examId", "==", examId));
+    const subSnap = await getDocs(subQ);
+    const submissions = [];
+    subSnap.forEach(d => submissions.push(d.data()));
+    const submitted = submissions.filter(s => s.status === "submitted" || s.status === "graded");
+
+    let avg = 0, high = 0, low = 0;
+    if (submitted.length > 0) {
+      const percents = submitted.map(s => s.maxScore > 0 ? (s.totalScore / s.maxScore) * 100 : 0);
+      avg = Math.round(percents.reduce((a, b) => a + b, 0) / percents.length);
+      high = Math.round(Math.max(...percents));
+      low = Math.round(Math.min(...percents));
+    }
+
+    const rows = submitted.length === 0
+      ? `<tr><td colspan="5" style="text-align:center; color:var(--muted);">No submissions yet.</td></tr>`
+      : submitted.map(s => `
+        <tr>
+          <td>${EduUtils.escapeHtml(s.studentName)}</td>
+          <td>${EduUtils.escapeHtml(s.studentRoll || "-")}</td>
+          <td>${s.totalScore} / ${s.maxScore}</td>
+          <td>${s.maxScore > 0 ? Math.round((s.totalScore / s.maxScore) * 100) : 0}%</td>
+          <td>${s.tabSwitchCount || 0}</td>
+        </tr>`).join("");
+
+    content.innerHTML = `
+      <h2>${EduUtils.escapeHtml(exam.title)} — Results</h2>
+      <div class="card" style="display:flex; gap:30px; flex-wrap:wrap;">
+        <div><div style="color:var(--muted); font-size:13px;">Submissions</div><div style="font-size:24px; font-weight:700;">${submitted.length}</div></div>
+        <div><div style="color:var(--muted); font-size:13px;">Average</div><div style="font-size:24px; font-weight:700;">${avg}%</div></div>
+        <div><div style="color:var(--muted); font-size:13px;">Highest</div><div style="font-size:24px; font-weight:700;">${high}%</div></div>
+        <div><div style="color:var(--muted); font-size:13px;">Lowest</div><div style="font-size:24px; font-weight:700;">${low}%</div></div>
+      </div>
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+          <strong>Student Results</strong>
+          <button class="btn secondary small" id="exportBtn">Export CSV</button>
+        </div>
+        <table>
+          <thead><tr><th>Name</th><th>Roll</th><th>Score</th><th>%</th><th>Tab-switches</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+
+    document.getElementById("exportBtn")?.addEventListener("click", () => exportCsv(exam.title, submitted));
+  }
+
+  function exportCsv(title, submissions) {
+    let csv = "Name,Roll,Score,Max,Percent,TabSwitches\n";
+    submissions.forEach(s => {
+      const percent = s.maxScore > 0 ? Math.round((s.totalScore / s.maxScore) * 100) : 0;
+      csv += `"${(s.studentName || "").replace(/"/g, '""')}","${s.studentRoll || ""}",${s.totalScore},${s.maxScore},${percent},${s.tabSwitchCount || 0}\n`;
+    });
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${title.replace(/[^a-z0-9]+/gi, "_")}_results.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+</script>
+</body>
+</html>

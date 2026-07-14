@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Battle Lobby — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="container">
+    <a href="index.html" class="brand">📘 EduExam</a>
+    <div class="nav-links"><a href="teacher-dashboard.html">&larr; Dashboard</a></div>
+  </div>
+</nav>
+
+<div class="container" style="padding-top:30px;">
+  <div id="content" class="center-loading">Loading lobby…</div>
+</div>
+
+<footer>Built for educational use — free forever. &copy; EduExam</footer>
+
+<script src="js/utils.js"></script>
+<script type="module">
+  import {
+    auth, db, onAuthStateChanged, doc, getDoc, updateDoc, setDoc, deleteDoc,
+    collection, query, where, onSnapshot, serverTimestamp,
+  } from "./js/firebase-init.js";
+
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+  const content = document.getElementById("content");
+  let battle = null;
+  let participants = [];
+  let uid = null;
+
+  onAuthStateChanged(auth, async (user) => {
+    if (!user) { window.location.href = "teacher-login.html"; return; }
+    uid = user.uid;
+    if (!code) { content.innerHTML = `<div class="alert error">No battle code specified.</div>`; return; }
+
+    const snap = await getDoc(doc(db, "battles", code));
+    if (!snap.exists() || snap.data().mentorId !== uid) {
+      content.innerHTML = `<div class="alert error">Battle not found or you don't have access.</div>`;
+      return;
+    }
+    battle = snap.data();
+
+    if (battle.status === "active") { window.location.href = `mentor-battle-dashboard.html?code=${code}`; return; }
+    if (battle.status === "finished") { window.location.href = `team-battle-result.html?code=${code}`; return; }
+
+    watchParticipants();
+  });
+
+  function watchParticipants() {
+    const q = query(collection(db, "battleParticipants"), where("battleCode", "==", code));
+    onSnapshot(q, (snap) => {
+      participants = [];
+      snap.forEach(d => participants.push({ id: d.id, ...d.data() }));
+      render();
+    });
+  }
+
+  function render() {
+    const teamOptions = battle.teamNames.map((name, i) =>
+      `<option value="${i}">${EduUtils.escapeHtml(name)}</option>`).join("");
+
+    const rows = participants.length === 0
+      ? `<p style="color:var(--muted); text-align:center;">No students have joined yet. Share the code below.</p>`
+      : participants.map(p => `
+          <div class="participant-row">
+            <div>
+              <strong>${EduUtils.escapeHtml(p.name)}</strong>
+              ${p.roll ? `<span style="color:var(--muted); font-size:13px;"> (${EduUtils.escapeHtml(p.roll)})</span>` : ""}
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <select data-pid="${p.id}" class="teamSelect" style="border-left:5px solid ${p.teamId !== null && p.teamId !== undefined ? EduUtils.teamColor(p.teamId) : '#ccc'};">
+                <option value="">— Unassigned —</option>
+                ${teamOptions}
+              </select>
+              <button class="btn danger small removeBtn" data-pid="${p.id}" data-name="${EduUtils.escapeHtml(p.name)}">Remove</button>
+            </div>
+          </div>`).join("");
+
+    // preserve current selection after rerender
+    content.innerHTML = `
+      <h2>⚔️ ${EduUtils.escapeHtml(battle.title)} — Lobby</h2>
+      <div class="battle-code-box">
+        <div style="font-size:14px; opacity:.8;">Battle Code:</div>
+        <div class="code">${code}</div>
+      </div>
+      <div class="card">
+        <h3>Students Joined (${participants.length})</h3>
+        ${rows}
+      </div>
+      <div class="card" style="text-align:center;">
+        <button class="btn success" id="startBtn" ${participants.length === 0 ? "disabled" : ""}>
+          🚀 Start Battle for Everyone
+        </button>
+        <p id="unassignedWarning" style="color:var(--warning); font-size:13px; margin-top:10px;"></p>
+      </div>`;
+
+    document.querySelectorAll(".teamSelect").forEach(sel => {
+      sel.value = participants.find(p => p.id === sel.dataset.pid)?.teamId ?? "";
+      sel.addEventListener("change", async () => {
+        const teamId = sel.value === "" ? null : Number(sel.value);
+        await updateDoc(doc(db, "battleParticipants", sel.dataset.pid), { teamId, status: teamId === null ? "waiting" : "assigned" });
+      });
+    });
+
+    const unassignedCount = participants.filter(p => p.teamId === null || p.teamId === undefined).length;
+    if (unassignedCount > 0) {
+      document.getElementById("unassignedWarning").textContent =
+        `${unassignedCount} student(s) not yet assigned to a team — they'll be left out if you start now.`;
+    }
+
+    document.querySelectorAll(".removeBtn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const ok = window.confirm(`Remove ${btn.dataset.name}? They can rejoin fresh with the same code and name.`);
+        if (!ok) return;
+        await deleteDoc(doc(db, "battleParticipants", btn.dataset.pid));
+        EduUtils.toast(`${btn.dataset.name} removed.`, "success");
+      });
+    });
+
+    document.getElementById("startBtn")?.addEventListener("click", startBattle);
+  }
+
+  async function startBattle() {
+    await updateDoc(doc(db, "battles", code), { status: "active", startedAt: serverTimestamp() });
+    window.location.href = `mentor-battle-dashboard.html?code=${code}`;
+  }
+</script>
+</body>
+</html>

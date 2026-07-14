@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EduExam — Free Online Exam Platform</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="container">
+    <div class="brand">📘 EduExam</div>
+    <div class="nav-links">
+      <a href="about.html">About</a>
+      <a href="teacher-login.html" class="btn secondary small">Teacher Login</a>
+      <a href="student-join.html" class="btn small">Student — Join Exam</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="container">
+    <h1>Free Online Exams for Every Classroom</h1>
+    <p>EduExam is a 100% free exam platform for teachers and students — no fees, no premium
+      tiers, no ads. Create an exam, share a key, and let students take it from any device.</p>
+    <div class="hero-actions">
+      <a href="teacher-login.html" class="btn">I'm a Teacher</a>
+      <a href="student-join.html" class="btn secondary">I'm a Student</a>
+    </div>
+  </div>
+</section>
+
+<div class="container">
+  <div class="steps">
+    <div class="step">
+      <div class="num">1</div>
+      <h3>Create</h3>
+      <p>Teachers build an exam with MCQ, True/False, or short-answer questions in minutes.</p>
+    </div>
+    <div class="step">
+      <div class="num">2</div>
+      <h3>Share the Key</h3>
+      <p>A unique exam key is generated. Share it with students — no accounts needed for them.</p>
+    </div>
+    <div class="step">
+      <div class="num">3</div>
+      <h3>Auto-Graded</h3>
+      <p>Objective questions are graded instantly. Students see their score right after submitting.</p>
+    </div>
+  </div>
+
+  <div class="card" style="text-align:center;">
+    <h3>Secure by design</h3>
+    <p style="color:var(--muted)">
+      Teacher accounts are protected with password login. Exam data is private to the
+      teacher who created it — students can only see the one exam whose key they were given,
+      nothing else.
+    </p>
+  </div>
+
+  <div class="card" style="text-align:center;">
+    <h3>📱 Scan to Join</h3>
+    <p style="color:var(--muted); font-size:14px;">
+      Students can scan this with their phone camera to open the join page directly —
+      no typing a web address needed.
+    </p>
+    <div id="qrBox" style="display:flex; justify-content:center; margin:16px 0;"></div>
+    <p style="color:var(--muted); font-size:13px;" id="qrUrlText"></p>
+  </div>
+</div>
+
+<footer>
+  Built for educational use — free forever. &copy; EduExam
+</footer>
+
+<script src="js/qrcode.min.js"></script>
+<script>
+  // Builds the QR code from whatever URL this site is actually hosted at,
+  // so it works automatically after deploying anywhere (no hardcoded domain).
+  (function () {
+    const joinUrl = new URL("student-join.html", window.location.href).toString();
+    document.getElementById("qrUrlText").textContent = joinUrl;
+    try {
+      new QRCode(document.getElementById("qrBox"), {
+        text: joinUrl,
+        width: 180,
+        height: 180,
+        colorDark: "#111827",
+        colorLight: "#ffffff",
+      });
+    } catch (err) {
+      document.getElementById("qrBox").innerHTML =
+        `<p style="color:var(--danger); font-size:13px;">QR code couldn't be generated. Share the link above instead.</p>`;
+    }
+  })();
+</script>
+
+</body>
+</html>

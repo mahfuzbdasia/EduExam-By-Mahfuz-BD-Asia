@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Exam Instructions — EduExam</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="container"><a href="index.html" class="brand">📘 EduExam</a></div>
+</nav>
+
+<div class="container" style="max-width:700px; padding-top:30px;">
+  <div id="content" class="center-loading">Loading exam…</div>
+</div>
+
+<footer>Built for educational use — free forever. &copy; EduExam</footer>
+
+<script src="js/utils.js"></script>
+<script type="module">
+  import { db, doc, getDoc } from "./js/firebase-init.js";
+
+  const params = new URLSearchParams(window.location.search);
+  const key = params.get("key");
+  const student = JSON.parse(sessionStorage.getItem("eduexam_student") || "null");
+  const content = document.getElementById("content");
+
+  if (!key || !student || student.key !== key) {
+    window.location.href = "student-join.html";
+  } else {
+    load();
+  }
+
+  async function load() {
+    const snap = await getDoc(doc(db, "exams", key));
+    if (!snap.exists()) { content.innerHTML = `<div class="alert error">Exam not found.</div>`; return; }
+    const exam = snap.data();
+    const totalPoints = exam.questions.reduce((s, q) => s + (Number(q.points) || 0), 0);
+    content.innerHTML = `
+      <div class="card">
+        <h2>${EduUtils.escapeHtml(exam.title)}</h2>
+        <p style="color:var(--muted);">${EduUtils.escapeHtml(exam.subject || "")}</p>
+        <table style="margin:16px 0;">
+          <tr><td><strong>Duration</strong></td><td>${exam.durationMinutes} minutes</td></tr>
+          <tr><td><strong>Questions</strong></td><td>${exam.questions.length}</td></tr>
+          <tr><td><strong>Total Points</strong></td><td>${totalPoints}</td></tr>
+          <tr><td><strong>Student</strong></td><td>${EduUtils.escapeHtml(student.name)}</td></tr>
+        </table>
+        ${exam.instructions ? `<div class="alert info"><strong>Instructions:</strong> ${EduUtils.escapeHtml(exam.instructions)}</div>` : ""}
+        <div class="alert warn">
+          Once you start, the timer cannot be paused. Do not close this tab — leaving may be
+          logged and shown to your teacher. Make sure you are ready before continuing.
+        </div>
+        <button class="btn block success" id="startBtn">I Understand, Start Exam</button>
+      </div>`;
+    document.getElementById("startBtn").addEventListener("click", () => {
+      window.location.href = `take-exam.html?key=${encodeURIComponent(key)}`;
+    });
+  }
+</script>
+</body>
+</html>
